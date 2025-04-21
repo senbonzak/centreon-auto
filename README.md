@@ -18,7 +18,7 @@ Ce script Python permet d'acquitter automatiquement les alertes non traitées da
 1. Clonez ce dépôt sur votre machine locale :
    ```bash
    git clone https://github.com/senbonzak/centreon-auto.git
-   cd centreon-auto-ack
+   cd centreon-auto
    ```
 
 2. Installez les dépendances :
