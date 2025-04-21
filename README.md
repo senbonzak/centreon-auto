@@ -17,8 +17,8 @@ Ce projet fournit un script Python permettant d'acquitter automatiquement les al
 
 1. Clonez ce dépôt sur votre machine locale :
    ```bash
-   git clone https://github.com/votre-username/centreon-auto-ack.git
-   cd centreon-auto-ack
+   git clone https://github.com/senbonzak/centreon-auto.git
+   cd centreon-auto
    ```
 
 2. Installez les dépendances :
