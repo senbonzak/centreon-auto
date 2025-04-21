@@ -1,33 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-# Charger les variables depuis le fichier .env s'il existe
-load_dotenv()
-
-# URL de base de l'API Centreon
-API_URL = os.getenv("CENTREON_API_URL")
-
-# Identifiants d'accès
-LOGIN = os.getenv("CENTREON_LOGIN")
-PASSWORD = os.getenv("CENTREON_PASSWORD")
-
-# Nombre maximum d’alertes à récupérer
-ALERT_LIMIT = int(os.getenv("ALERT_LIMIT", 100))
-
-# Nom du fichier de sortie
-OUTPUT_FILE = os.getenv("OUTPUT_FILE", "output/alerts_output.json")
-
-# Fichier de logs (futur usage)
-LOG_FILE = os.getenv("LOG_FILE", "logs/alerts.log")
-
-LOGGING_CONFIG = {
-    'level': os.getenv("LOG_LEVEL", "INFO").upper(),
-    'format': "%(asctime)s [%(levelname)s] - %(message)s",
-    'datefmt': "%Y-%m-%d %H:%M:%S"
-}
-
-
-import os
 import logging
 from dotenv import load_dotenv
 
