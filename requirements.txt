@@ -1,3 +1,20 @@
+# Requirements originaux
 requests>=2.25.1
 python-dotenv>=0.15.0
 urllib3>=1.26.4
+
+# Dashboard Web
+Flask>=2.3.0
+Flask-SQLAlchemy>=3.0.0
+Flask-SocketIO>=5.3.0
+
+# Optionnel: Pour la production
+gunicorn>=21.2.0
+redis>=4.6.0
+
+# Optionnel: Pour monitoring avancé
+prometheus-client>=0.17.0
+prometheus-flask-exporter>=0.23.0
+
+# Optionnel: Pour base de données PostgreSQL
+psycopg2-binary>=2.9.0
