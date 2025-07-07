@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Centreon alert auto-acknowledgment script
-English version with clean output
+English version with dashboard integration
 """
 
 import requests
@@ -21,6 +21,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ===============================================
 
 load_dotenv()
+
+# Dashboard integration
+try:
+    # Add parent directory to path for dashboard import
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+    from dashboard import app, db, save_acknowledgment
+    DASHBOARD_ENABLED = True
+    print("Dashboard detected - Integration enabled")
+except ImportError:
+    DASHBOARD_ENABLED = False
+    print("Dashboard not detected - Standalone mode")
 
 # Centreon API
 API_URL = os.getenv("CENTREON_API_URL")
@@ -170,7 +181,8 @@ def get_unhandled_alerts(token):
         logging.error(f"Alert retrieval error: {e}")
         return []
 
-def acknowledge_service(token, service_id, host_id, comment="Auto ACK by Miguel"):
+def acknowledge_service(token, service_id, host_id, service_name=None, host_name=None, 
+                       status=None, comment="Auto ACK by Miguel"):
     """Acknowledge a service alert"""
     if not token:
         logging.error("Missing token")
@@ -205,12 +217,56 @@ def acknowledge_service(token, service_id, host_id, comment="Auto ACK by Miguel"
             timeout=ACK_TIMEOUT
         )
         response.raise_for_status()
+        
+        # Save to dashboard if available
+        if DASHBOARD_ENABLED:
+            with app.app_context():
+                save_acknowledgment(
+                    service_id=service_id,
+                    host_id=host_id,
+                    service_name=service_name,
+                    host_name=host_name,
+                    status=status,
+                    success=True
+                )
+                logging.debug("Acknowledgment saved to dashboard")
+        
         return True
     except requests.exceptions.Timeout:
-        logging.error(f"Acknowledgment timeout for service {service_id}")
+        error_msg = f"Acknowledgment timeout for service {service_id}"
+        logging.error(error_msg)
+        
+        # Save failure to dashboard if available
+        if DASHBOARD_ENABLED:
+            with app.app_context():
+                save_acknowledgment(
+                    service_id=service_id,
+                    host_id=host_id,
+                    service_name=service_name,
+                    host_name=host_name,
+                    status=status,
+                    success=False,
+                    error_message=error_msg
+                )
+        
         return False
     except Exception as e:
-        logging.error(f"Failed to acknowledge service {service_id}: {e}")
+        error_msg = f"Failed to acknowledge service {service_id}: {e}"
+        logging.error(error_msg)
+        
+        # Save failure to dashboard if available
+        if DASHBOARD_ENABLED:
+            with app.app_context():
+                save_acknowledgment(
+                    service_id=service_id,
+                    host_id=host_id,
+                    service_name=service_name,
+                    host_name=host_name,
+                    status=status,
+                    success=False,
+                    error_message=str(e)
+                )
+        
         return False
 
 def save_alerts_to_file(alerts):
@@ -232,6 +288,9 @@ def main():
     configure_logging()
     
     logging.info("Starting acknowledgment script")
+    
+    if DASHBOARD_ENABLED:
+        logging.info("Dashboard integration active - Real-time data available")
     
     # Get token
     token = get_token()
@@ -258,9 +317,10 @@ def main():
         host_id = alert.get("host_id")
         service_name = alert.get("name", "Unknown")
         host_name = alert.get("parent", {}).get("name", "Unknown")
+        status = alert.get("status", {}).get("name", "UNKNOWN")
         
         if service_id and host_id:
-            if acknowledge_service(token, service_id, host_id):
+            if acknowledge_service(token, service_id, host_id, service_name, host_name, status):
                 successful_acks += 1
                 logging.info(f"[{i:2d}/{len(alerts)}] SUCCESS: {service_name} on {host_name}")
             else:
@@ -275,6 +335,9 @@ def main():
     
     if failed_acks > 0:
         logging.warning("Some failures occurred. Check timeouts or connectivity.")
+    
+    if DASHBOARD_ENABLED:
+        logging.info("Check dashboard for real-time visualization: http://localhost:5000")
     
     logging.info("Script completed")
 
