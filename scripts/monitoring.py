@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Centreon alert auto-acknowledgment script
-English version with dashboard integration
+English version with persistent database integration
 """
 
 import requests
@@ -10,6 +10,8 @@ import urllib3
 import os
 import sys
 import logging
+import sqlite3
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -22,7 +24,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
-# Dashboard integration
+# Dashboard integration (optional)
 try:
     # Add parent directory to path for dashboard import
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -31,7 +33,7 @@ try:
     print("Dashboard detected - Integration enabled")
 except ImportError:
     DASHBOARD_ENABLED = False
-    print("Dashboard not detected - Standalone mode")
+    print("Dashboard not detected - Using direct database mode")
 
 # Centreon API
 API_URL = os.getenv("CENTREON_API_URL")
@@ -56,6 +58,10 @@ LOGIN_TIMEOUT = int(os.getenv("LOGIN_TIMEOUT", 30))
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", 60))
 ACK_TIMEOUT = int(os.getenv("ACK_TIMEOUT", 20))
 
+# Database configuration (TOUJOURS actif)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///centreon_dashboard.db")
+DB_PATH = DATABASE_URL.replace("sqlite:///", "")
+
 # File paths
 today = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", os.path.join(OUTPUT_DIR, "alerts_output.json"))
@@ -67,6 +73,100 @@ if not os.path.isabs(OUTPUT_FILE):
 
 if not os.path.isabs(LOG_FILE):
     LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", LOG_FILE)
+
+if not os.path.isabs(DB_PATH):
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", DB_PATH)
+
+# ===============================================
+# DATABASE FUNCTIONS (TOUJOURS ACTIVES)
+# ===============================================
+
+def init_database():
+    """Initialize dashboard database - TOUJOURS appelée"""
+    try:
+        # Créer le répertoire si nécessaire
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Même structure que dashboard.py
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alert_acknowledgment (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_id VARCHAR(50) NOT NULL,
+                host_id VARCHAR(50) NOT NULL,
+                service_name VARCHAR(200),
+                host_name VARCHAR(200),
+                status VARCHAR(20),
+                acknowledged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                success BOOLEAN DEFAULT 1,
+                error_message TEXT,
+                response_time REAL
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logging.info(f"Database initialized: {DB_PATH}")
+        
+    except Exception as e:
+        logging.error(f"Database initialization failed: {e}")
+
+def save_to_database(service_id, host_id, service_name=None, host_name=None, 
+                    status=None, success=True, error_message=None, response_time=None):
+    """Sauvegarde DIRECTE en base SQLite - TOUJOURS active"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO alert_acknowledgment 
+            (service_id, host_id, service_name, host_name, status, success, error_message, response_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            str(service_id), 
+            str(host_id), 
+            service_name, 
+            host_name, 
+            status, 
+            success, 
+            error_message, 
+            response_time
+        ))
+        
+        conn.commit()
+        conn.close()
+        logging.debug(f"Saved to database: {service_name} on {host_name} (success: {success})")
+        
+    except Exception as e:
+        logging.error(f"Database save failed: {e}")
+
+def save_acknowledgment_dual(service_id, host_id, service_name=None, host_name=None, 
+                           status=None, success=True, error_message=None, response_time=None):
+    """Sauvegarde DOUBLE : dashboard (si dispo) + base directe (toujours)"""
+    
+    # 1. TOUJOURS sauvegarder en base directe
+    save_to_database(service_id, host_id, service_name, host_name, 
+                    status, success, error_message, response_time)
+    
+    # 2. Si dashboard disponible, sauvegarder aussi via son système
+    if DASHBOARD_ENABLED:
+        try:
+            with app.app_context():
+                save_acknowledgment(
+                    service_id=service_id,
+                    host_id=host_id,
+                    service_name=service_name,
+                    host_name=host_name,
+                    status=status,
+                    success=success,
+                    error_message=error_message,
+                    response_time=response_time
+                )
+                logging.debug("Also saved via dashboard system")
+        except Exception as e:
+            logging.warning(f"Dashboard save failed (direct save OK): {e}")
 
 # ===============================================
 # FUNCTIONS
@@ -183,11 +283,12 @@ def get_unhandled_alerts(token):
 
 def acknowledge_service(token, service_id, host_id, service_name=None, host_name=None, 
                        status=None, comment="Auto ACK by Miguel"):
-    """Acknowledge a service alert"""
+    """Acknowledge a service alert with timing"""
     if not token:
         logging.error("Missing token")
-        return False
+        return False, None
         
+    start_time = time.time()
     try:
         response = requests.post(
             f"{API_URL}/monitoring/resources/acknowledge",
@@ -217,57 +318,58 @@ def acknowledge_service(token, service_id, host_id, service_name=None, host_name
             timeout=ACK_TIMEOUT
         )
         response.raise_for_status()
+        response_time = time.time() - start_time
         
-        # Save to dashboard if available
-        if DASHBOARD_ENABLED:
-            with app.app_context():
-                save_acknowledgment(
-                    service_id=service_id,
-                    host_id=host_id,
-                    service_name=service_name,
-                    host_name=host_name,
-                    status=status,
-                    success=True
-                )
-                logging.debug("Acknowledgment saved to dashboard")
+        # TOUJOURS sauvegarder le succès
+        save_acknowledgment_dual(
+            service_id=service_id,
+            host_id=host_id,
+            service_name=service_name,
+            host_name=host_name,
+            status=status,
+            success=True,
+            response_time=response_time
+        )
         
-        return True
+        return True, response_time
+        
     except requests.exceptions.Timeout:
         error_msg = f"Acknowledgment timeout for service {service_id}"
         logging.error(error_msg)
+        response_time = time.time() - start_time
         
-        # Save failure to dashboard if available
-        if DASHBOARD_ENABLED:
-            with app.app_context():
-                save_acknowledgment(
-                    service_id=service_id,
-                    host_id=host_id,
-                    service_name=service_name,
-                    host_name=host_name,
-                    status=status,
-                    success=False,
-                    error_message=error_msg
-                )
+        # TOUJOURS sauvegarder l'échec
+        save_acknowledgment_dual(
+            service_id=service_id,
+            host_id=host_id,
+            service_name=service_name,
+            host_name=host_name,
+            status=status,
+            success=False,
+            error_message=error_msg,
+            response_time=response_time
+        )
         
-        return False
+        return False, response_time
+        
     except Exception as e:
         error_msg = f"Failed to acknowledge service {service_id}: {e}"
         logging.error(error_msg)
+        response_time = time.time() - start_time
         
-        # Save failure to dashboard if available
-        if DASHBOARD_ENABLED:
-            with app.app_context():
-                save_acknowledgment(
-                    service_id=service_id,
-                    host_id=host_id,
-                    service_name=service_name,
-                    host_name=host_name,
-                    status=status,
-                    success=False,
-                    error_message=str(e)
-                )
+        # TOUJOURS sauvegarder l'échec
+        save_acknowledgment_dual(
+            service_id=service_id,
+            host_id=host_id,
+            service_name=service_name,
+            host_name=host_name,
+            status=status,
+            success=False,
+            error_message=str(e),
+            response_time=response_time
+        )
         
-        return False
+        return False, response_time
 
 def save_alerts_to_file(alerts):
     """Save alerts to JSON file"""
@@ -287,10 +389,15 @@ def main():
     """Main function"""
     configure_logging()
     
-    logging.info("Starting acknowledgment script")
+    logging.info("Starting acknowledgment script with persistent database")
+    
+    # TOUJOURS initialiser la base (dashboard ou pas)
+    init_database()
     
     if DASHBOARD_ENABLED:
-        logging.info("Dashboard integration active - Real-time data available")
+        logging.info("Dashboard integration active - Dual save mode")
+    else:
+        logging.info("Direct database mode - Data will be available when dashboard starts")
     
     # Get token
     token = get_token()
@@ -320,25 +427,40 @@ def main():
         status = alert.get("status", {}).get("name", "UNKNOWN")
         
         if service_id and host_id:
-            if acknowledge_service(token, service_id, host_id, service_name, host_name, status):
+            success, response_time = acknowledge_service(
+                token, service_id, host_id, service_name, host_name, status
+            )
+            
+            if success:
                 successful_acks += 1
-                logging.info(f"[{i:2d}/{len(alerts)}] SUCCESS: {service_name} on {host_name}")
+                logging.info(f"[{i:2d}/{len(alerts)}] SUCCESS: {service_name} on {host_name} ({response_time:.3f}s)")
             else:
                 failed_acks += 1
                 logging.error(f"[{i:2d}/{len(alerts)}] FAILED: {service_name} on {host_name}")
+                
         else:
             failed_acks += 1
             logging.warning(f"[{i:2d}/{len(alerts)}] Missing ID: {service_name} on {host_name}")
+            
+            # Sauvegarder l'ID manquant aussi
+            save_acknowledgment_dual(
+                service_id=service_id or "unknown",
+                host_id=host_id or "unknown",
+                service_name=service_name,
+                host_name=host_name,
+                status=status,
+                success=False,
+                error_message="Missing service_id or host_id"
+            )
     
     # Summary
     logging.info(f"Summary: {successful_acks} successful, {failed_acks} failed out of {len(alerts)} alerts")
+    logging.info(f"All data saved to persistent database: {DB_PATH}")
     
     if failed_acks > 0:
         logging.warning("Some failures occurred. Check timeouts or connectivity.")
     
-    if DASHBOARD_ENABLED:
-        logging.info("Check dashboard for real-time visualization: http://localhost:5000")
-    
+    logging.info("Dashboard data available at: http://localhost:5000")
     logging.info("Script completed")
 
 if __name__ == "__main__":
