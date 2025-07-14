@@ -2,6 +2,7 @@
 """
 Script d'envoi d'emails pour les hôtes du hostgroup SQUARE
 Utilise le CLI Centreon pour vérifier l'appartenance aux hostgroups
+Peut être appelé directement ou depuis monitoring.py
 """
 
 import json
@@ -156,14 +157,14 @@ def check_hostgroup_membership(hostname):
         for line in lines[1:]:  # Skip header "id;name"
             if ';' in line:
                 hostgroup_id, hostgroup_name = line.split(';', 1)
-                logging.debug(f"  Hostgroup trouvé: {hostgroup_name} (ID: {hostgroup_id})")
+                logging.debug(f"  Hostgroup found: {hostgroup_name} (ID: {hostgroup_id})")
                 
                 # Vérifier si "SQUARE" est dans le nom (insensible à la casse)
                 if "SQUARE" in hostgroup_name.upper():
-                    logging.info(f"✅ {hostname} appartient au hostgroup SQUARE: {hostgroup_name}")
+                    logging.info(f"Host {hostname} belongs to SQUARE hostgroup: {hostgroup_name}")
                     return True
         
-        logging.debug(f"❌ {hostname} n'appartient pas au hostgroup SQUARE")
+        logging.debug(f"Host {hostname} does not belong to SQUARE hostgroup")
         return False
         
     except subprocess.CalledProcessError as e:
@@ -299,7 +300,6 @@ def process_square_alerts():
         
         logging.info(f"[{i:2d}/{len(alerts)}] Traitement: {service_name} sur {host_name}")
         
-        # Vérifier appartenance SQUARE (avec cache)
         if host_name not in checked_hosts:
             is_square = check_hostgroup_membership(host_name)
             checked_hosts.add(host_name)
@@ -329,14 +329,14 @@ def process_square_alerts():
             
             if success:
                 emails_sent += 1
-                logging.info(f"✅ Email envoyé: {alert['service_name']} sur {alert['host_name']}")
+                logging.info(f" Email envoyé: {alert['service_name']} sur {alert['host_name']}")
             else:
                 emails_failed += 1
-                logging.error(f"❌ Échec email: {alert['service_name']} sur {alert['host_name']} - {error}")
+                logging.error(f" Échec email: {alert['service_name']} sur {alert['host_name']} - {error}")
                 
         except Exception as e:
             emails_failed += 1
-            logging.error(f"❌ Erreur: {alert['service_name']} sur {alert['host_name']} - {e}")
+            logging.error(f" Erreur: {alert['service_name']} sur {alert['host_name']} - {e}")
     
     # Résumé
     logging.info(f"Résumé: {emails_sent} emails envoyés, {emails_failed} échecs")
@@ -346,26 +346,36 @@ def main():
     """Fonction principale"""
     configure_logging()
     
-    logging.info("Script d'email SQUARE - Démarrage")
-    logging.info(f"Mode email: {'Relai local' if USE_LOCAL_RELAY else 'SMTP externe'}")
-    logging.info(f"Serveur: {SMTP_SERVER}:{SMTP_PORT}")
-    logging.info(f"Expéditeur: {EMAIL_SENDER}")
-    logging.info(f"Fichier source: {OUTPUT_FILE}")
-    logging.info(f"Destinataires TO: {SQUARE_RECIPIENTS}")
+    # Log de démarrage simple
+    start_msg = f"SQUARE Email Script Started - Mode: {'Local Relay' if USE_LOCAL_RELAY else 'SMTP External'}"
+    logging.info(start_msg)
+    write_simple_log(start_msg)
+    
+    logging.info(f"Server: {SMTP_SERVER}:{SMTP_PORT}")
+    logging.info(f"Sender: {EMAIL_SENDER}")
+    logging.info(f"Source file: {OUTPUT_FILE}")
+    logging.info(f"TO recipients: {SQUARE_RECIPIENTS}")
     
     if SQUARE_CC_RECIPIENTS:
-        logging.info(f"Destinataires CC: {SQUARE_CC_RECIPIENTS}")
+        logging.info(f"CC recipients: {SQUARE_CC_RECIPIENTS}")
     if SQUARE_BCC_RECIPIENTS:
-        logging.info(f"Destinataires BCC: {SQUARE_BCC_RECIPIENTS}")
+        logging.info(f"BCC recipients: {SQUARE_BCC_RECIPIENTS}")
     
     # Vérifications préalables
     if not os.path.exists(OUTPUT_FILE):
-        logging.error(f"Fichier d'alertes non trouvé: {OUTPUT_FILE}")
-        logging.info("Exécuter d'abord monitoring.py")
+        error_msg = f"Alert file not found: {OUTPUT_FILE}"
+        logging.error(error_msg)
+        write_simple_log(error_msg, "ERROR")
+        logging.info("Run monitoring.py first")
         return
     
     # Traitement
     process_square_alerts()
+    
+    # Log de fin
+    end_msg = "SQUARE Email Script Completed"
+    logging.info(end_msg)
+    write_simple_log(end_msg)
 
 if __name__ == "__main__":
     main()
